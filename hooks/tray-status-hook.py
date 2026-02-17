@@ -96,6 +96,14 @@ def main():
     event = data.get("hook_event_name", "")
     session_id = data.get("session_id", "unknown")
 
+    # Debug: log all hook events
+    debug_file = os.path.join(STATUS_DIR, "debug.log")
+    os.makedirs(STATUS_DIR, exist_ok=True)
+    with open(debug_file, "a") as df:
+        df.write(f"{datetime.now().isoformat()} event={event} sid={session_id[:8]} keys={list(data.keys())}\n")
+        if event == "UserPromptSubmit":
+            df.write(f"  user_prompt={data.get('user_prompt', '<MISSING>')!r}\n")
+
     if event == "SessionStart" and not is_tray_running():
         launch_tray()
 
