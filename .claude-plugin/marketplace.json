@@ -1,0 +1,19 @@
+{
+  "name": "mgierm-tray",
+  "owner": {
+    "name": "Mikołaj Giermek",
+    "email": "mgierm@gmail.com"
+  },
+  "metadata": {
+    "description": "System tray indicator for Claude Code on Ubuntu"
+  },
+  "plugins": [
+    {
+      "name": "tray-indicator",
+      "source": ".",
+      "description": "System tray indicator for Ubuntu showing Claude Code session status (working, waiting, idle) with multi-session support",
+      "version": "1.0.0",
+      "category": "productivity"
+    }
+  ]
+}
