@@ -4,6 +4,9 @@
 Reads per-session status from ~/.claude-tray/sessions.json
 and shows an aggregate icon + per-session details in the menu.
 
+The icon updates every second via polling. The menu content is only
+refreshed when the user opens it (on-demand), avoiding flicker.
+
 Requirements:
     sudo apt install gir1.2-appindicator3-0.1
 
@@ -41,26 +44,12 @@ def short_id(session_id):
     return session_id[:8] if len(session_id) > 8 else session_id
 
 
-def build_labels(sessions):
-    """Build a list of label strings representing current state."""
-    labels = []
-    if not sessions:
-        labels.append("No active sessions")
-    else:
-        labels.append(f"{len(sessions)} session(s)")
-        for sid, info in sessions.items():
-            status = info.get("status", "?")
-            tool = info.get("tool_name")
-            cwd = info.get("cwd", "")
-            dirname = os.path.basename(cwd) if cwd else ""
-
-            label = f"[{short_id(sid)}] {status}"
-            if tool:
-                label += f" ({tool})"
-            if dirname:
-                label += f"  \u2014 {dirname}"
-            labels.append(label)
-    return labels
+def read_sessions():
+    try:
+        with open(STATUS_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
 
 class ClaudeTray:
@@ -72,77 +61,67 @@ class ClaudeTray:
         )
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.indicator.set_title("Claude Code")
-        self.menu = Gtk.Menu()
+
         self._last_agg = None
-        self._last_labels = []
-        self._session_items = []
-        self._menu_visible = False
-        self._pending_labels = None
+        self.menu = Gtk.Menu()
 
-        self._separator = Gtk.SeparatorMenuItem()
-        self._quit_item = Gtk.MenuItem(label="Quit")
-        self._quit_item.connect("activate", Gtk.main_quit)
-
-        self.menu.append(self._separator)
-        self.menu.append(self._quit_item)
-        self._sync_items(["No active sessions"])
-        self.menu.show_all()
-
-        # Freeze menu updates while it's open
+        # Populate menu once at start, then refresh on open
+        self._build_menu(read_sessions())
         self.menu.connect("show", self._on_menu_show)
-        self.menu.connect("hide", self._on_menu_hide)
 
         self.indicator.set_menu(self.menu)
-        GLib.timeout_add_seconds(1, self.update_status)
+        GLib.timeout_add_seconds(1, self._update_icon)
 
     def _on_menu_show(self, _widget):
-        self._menu_visible = True
+        """Refresh menu content each time the user opens it."""
+        self._build_menu(read_sessions())
 
-    def _on_menu_hide(self, _widget):
-        self._menu_visible = False
-        # Apply deferred update
-        if self._pending_labels is not None:
-            self._sync_items(self._pending_labels)
-            self._pending_labels = None
+    def _build_menu(self, sessions):
+        """Rebuild menu from scratch (only called on open, not on timer)."""
+        for child in self.menu.get_children():
+            self.menu.remove(child)
 
-    def _sync_items(self, labels):
-        """Update menu items in-place, only adding/removing when count changes."""
-        for i, text in enumerate(labels):
-            if i < len(self._session_items):
-                self._session_items[i].set_label(text)
-            else:
-                item = Gtk.MenuItem(label=text)
+        if not sessions:
+            item = Gtk.MenuItem(label="No active sessions")
+            item.set_sensitive(False)
+            self.menu.append(item)
+        else:
+            header = Gtk.MenuItem(label=f"{len(sessions)} session(s)")
+            header.set_sensitive(False)
+            self.menu.append(header)
+            self.menu.append(Gtk.SeparatorMenuItem())
+
+            for sid, info in sessions.items():
+                status = info.get("status", "?")
+                tool = info.get("tool_name")
+                cwd = info.get("cwd", "")
+                dirname = os.path.basename(cwd) if cwd else ""
+
+                label = f"[{short_id(sid)}] {status}"
+                if tool:
+                    label += f" ({tool})"
+                if dirname:
+                    label += f"  \u2014 {dirname}"
+
+                item = Gtk.MenuItem(label=label)
                 item.set_sensitive(False)
-                self.menu.insert(item, i)
-                item.show()
-                self._session_items.append(item)
+                self.menu.append(item)
 
-        while len(self._session_items) > len(labels):
-            item = self._session_items.pop()
-            self.menu.remove(item)
+        self.menu.append(Gtk.SeparatorMenuItem())
+        quit_item = Gtk.MenuItem(label="Quit")
+        quit_item.connect("activate", Gtk.main_quit)
+        self.menu.append(quit_item)
+        self.menu.show_all()
 
-        self._last_labels = labels
-
-    def update_status(self):
-        try:
-            with open(STATUS_FILE) as f:
-                sessions = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            sessions = {}
-
+    def _update_icon(self):
+        """Timer callback: only update the tray icon, never touch the menu."""
+        sessions = read_sessions()
         agg = aggregate_status(sessions)
 
         if agg != self._last_agg:
             self.indicator.set_icon_full(ICONS.get(agg, "user-offline"), agg)
             self.indicator.set_title(f"Claude Code: {agg}")
             self._last_agg = agg
-
-        labels = build_labels(sessions)
-        if labels != self._last_labels:
-            if self._menu_visible:
-                self._pending_labels = labels
-            else:
-                self._sync_items(labels)
 
         return True
 
