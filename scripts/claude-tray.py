@@ -74,35 +74,49 @@ class ClaudeTray:
         self.indicator.set_title("Claude Code")
         self.menu = Gtk.Menu()
         self._last_agg = None
+        self._last_labels = []
         self._session_items = []
+        self._menu_visible = False
+        self._pending_labels = None
+
         self._separator = Gtk.SeparatorMenuItem()
         self._quit_item = Gtk.MenuItem(label="Quit")
         self._quit_item.connect("activate", Gtk.main_quit)
 
-        # Build initial menu structure
         self.menu.append(self._separator)
         self.menu.append(self._quit_item)
         self._sync_items(["No active sessions"])
         self.menu.show_all()
 
+        # Freeze menu updates while it's open
+        self.menu.connect("show", self._on_menu_show)
+        self.menu.connect("hide", self._on_menu_hide)
+
         self.indicator.set_menu(self.menu)
         GLib.timeout_add_seconds(1, self.update_status)
 
+    def _on_menu_show(self, _widget):
+        self._menu_visible = True
+
+    def _on_menu_hide(self, _widget):
+        self._menu_visible = False
+        # Apply deferred update
+        if self._pending_labels is not None:
+            self._sync_items(self._pending_labels)
+            self._pending_labels = None
+
     def _sync_items(self, labels):
         """Update menu items in-place, only adding/removing when count changes."""
-        # Update existing items' labels
         for i, text in enumerate(labels):
             if i < len(self._session_items):
                 self._session_items[i].set_label(text)
             else:
                 item = Gtk.MenuItem(label=text)
                 item.set_sensitive(False)
-                # Insert before the separator
                 self.menu.insert(item, i)
                 item.show()
                 self._session_items.append(item)
 
-        # Remove excess items
         while len(self._session_items) > len(labels):
             item = self._session_items.pop()
             self.menu.remove(item)
@@ -125,7 +139,10 @@ class ClaudeTray:
 
         labels = build_labels(sessions)
         if labels != self._last_labels:
-            self._sync_items(labels)
+            if self._menu_visible:
+                self._pending_labels = labels
+            else:
+                self._sync_items(labels)
 
         return True
 
