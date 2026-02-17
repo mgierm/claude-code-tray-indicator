@@ -73,30 +73,40 @@ class ClaudeTray:
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.indicator.set_title("Claude Code")
         self.menu = Gtk.Menu()
-        self._last_labels = None
         self._last_agg = None
         self._session_items = []
-        self._build_menu([])
+        self._separator = Gtk.SeparatorMenuItem()
+        self._quit_item = Gtk.MenuItem(label="Quit")
+        self._quit_item.connect("activate", Gtk.main_quit)
+
+        # Build initial menu structure
+        self.menu.append(self._separator)
+        self.menu.append(self._quit_item)
+        self._sync_items(["No active sessions"])
+        self.menu.show_all()
+
         self.indicator.set_menu(self.menu)
         GLib.timeout_add_seconds(1, self.update_status)
 
-    def _build_menu(self, labels):
-        """Full menu rebuild — only called when labels actually change."""
-        for child in self.menu.get_children():
-            self.menu.remove(child)
+    def _sync_items(self, labels):
+        """Update menu items in-place, only adding/removing when count changes."""
+        # Update existing items' labels
+        for i, text in enumerate(labels):
+            if i < len(self._session_items):
+                self._session_items[i].set_label(text)
+            else:
+                item = Gtk.MenuItem(label=text)
+                item.set_sensitive(False)
+                # Insert before the separator
+                self.menu.insert(item, i)
+                item.show()
+                self._session_items.append(item)
 
-        self._session_items = []
-        for text in labels:
-            item = Gtk.MenuItem(label=text)
-            item.set_sensitive(False)
-            self.menu.append(item)
-            self._session_items.append(item)
+        # Remove excess items
+        while len(self._session_items) > len(labels):
+            item = self._session_items.pop()
+            self.menu.remove(item)
 
-        self.menu.append(Gtk.SeparatorMenuItem())
-        quit_item = Gtk.MenuItem(label="Quit")
-        quit_item.connect("activate", Gtk.main_quit)
-        self.menu.append(quit_item)
-        self.menu.show_all()
         self._last_labels = labels
 
     def update_status(self):
@@ -115,7 +125,7 @@ class ClaudeTray:
 
         labels = build_labels(sessions)
         if labels != self._last_labels:
-            self._build_menu(labels)
+            self._sync_items(labels)
 
         return True
 
