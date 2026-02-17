@@ -4,8 +4,9 @@
 Reads per-session status from ~/.claude-tray/sessions.json
 and shows an aggregate icon + per-session details in the menu.
 
-The icon updates every second via polling. The menu content is only
-refreshed when the user opens it (on-demand), avoiding flicker.
+The icon updates every second via polling. The menu uses pre-allocated
+slots that are shown/hidden as needed — no widgets are ever added or
+removed after init, so the menu never flickers.
 
 Requirements:
     sudo apt install gir1.2-appindicator3-0.1
@@ -14,11 +15,14 @@ Usage:
     python3 claude-tray.py &
 """
 import gi, json, os
+from datetime import datetime, timedelta
 gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, AppIndicator3, GLib
 
 STATUS_FILE = os.path.expanduser("~/.claude-tray/sessions.json")
+MAX_SLOTS = 10
+STALE_MINUTES = 10
 
 ICONS = {
     "working": "media-record",
@@ -31,7 +35,6 @@ STATUS_PRIORITY = {"working": 0, "waiting": 1, "active": 2, "idle": 3}
 
 
 def aggregate_status(sessions):
-    """Return the highest-priority status across all sessions."""
     if not sessions:
         return "idle"
     return min(
@@ -47,9 +50,16 @@ def short_id(session_id):
 def read_sessions():
     try:
         with open(STATUS_FILE) as f:
-            return json.load(f)
+            sessions = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+    # Prune stale sessions (no update for STALE_MINUTES)
+    cutoff = (datetime.now() - timedelta(minutes=STALE_MINUTES)).isoformat()
+    return {
+        sid: info for sid, info in sessions.items()
+        if info.get("timestamp", "") > cutoff
+    }
 
 
 class ClaudeTray:
@@ -65,33 +75,59 @@ class ClaudeTray:
         self._last_agg = None
         self.menu = Gtk.Menu()
 
-        # Populate menu once at start, then refresh on open
-        self._build_menu(read_sessions())
-        self.menu.connect("show", self._on_menu_show)
+        # Pre-allocate header + session slots (hidden by default)
+        self._header = Gtk.MenuItem(label="No active sessions")
+        self._header.set_sensitive(False)
+        self.menu.append(self._header)
+
+        self._slot_sep = Gtk.SeparatorMenuItem()
+        self.menu.append(self._slot_sep)
+        self._slot_sep.hide()
+
+        self._slots = []
+        for _ in range(MAX_SLOTS):
+            item = Gtk.MenuItem(label="")
+            item.set_sensitive(False)
+            item.set_no_show_all(True)
+            item.hide()
+            self.menu.append(item)
+            self._slots.append(item)
+
+        self.menu.append(Gtk.SeparatorMenuItem())
+        quit_item = Gtk.MenuItem(label="Quit")
+        quit_item.connect("activate", Gtk.main_quit)
+        self.menu.append(quit_item)
+        self.menu.show_all()
+
+        # show_all would show hidden slots, so re-hide them
+        self._slot_sep.hide()
+        for slot in self._slots:
+            slot.hide()
 
         self.indicator.set_menu(self.menu)
-        GLib.timeout_add_seconds(1, self._update_icon)
+        GLib.timeout_add_seconds(1, self._update)
 
-    def _on_menu_show(self, _widget):
-        """Refresh menu content each time the user opens it."""
-        self._build_menu(read_sessions())
+    def _update(self):
+        sessions = read_sessions()
+        agg = aggregate_status(sessions)
 
-    def _build_menu(self, sessions):
-        """Rebuild menu from scratch (only called on open, not on timer)."""
-        for child in self.menu.get_children():
-            self.menu.remove(child)
+        if agg != self._last_agg:
+            self.indicator.set_icon_full(ICONS.get(agg, "user-offline"), agg)
+            self.indicator.set_title(f"Claude Code: {agg}")
+            self._last_agg = agg
 
-        if not sessions:
-            item = Gtk.MenuItem(label="No active sessions")
-            item.set_sensitive(False)
-            self.menu.append(item)
+        items = list(sessions.items())[:MAX_SLOTS]
+
+        if not items:
+            self._header.set_label("No active sessions")
+            self._slot_sep.hide()
         else:
-            header = Gtk.MenuItem(label=f"{len(sessions)} session(s)")
-            header.set_sensitive(False)
-            self.menu.append(header)
-            self.menu.append(Gtk.SeparatorMenuItem())
+            self._header.set_label(f"{len(items)} session(s)")
+            self._slot_sep.show()
 
-            for sid, info in sessions.items():
+        for i, slot in enumerate(self._slots):
+            if i < len(items):
+                sid, info = items[i]
                 status = info.get("status", "?")
                 tool = info.get("tool_name")
                 cwd = info.get("cwd", "")
@@ -103,25 +139,10 @@ class ClaudeTray:
                 if dirname:
                     label += f"  \u2014 {dirname}"
 
-                item = Gtk.MenuItem(label=label)
-                item.set_sensitive(False)
-                self.menu.append(item)
-
-        self.menu.append(Gtk.SeparatorMenuItem())
-        quit_item = Gtk.MenuItem(label="Quit")
-        quit_item.connect("activate", Gtk.main_quit)
-        self.menu.append(quit_item)
-        self.menu.show_all()
-
-    def _update_icon(self):
-        """Timer callback: only update the tray icon, never touch the menu."""
-        sessions = read_sessions()
-        agg = aggregate_status(sessions)
-
-        if agg != self._last_agg:
-            self.indicator.set_icon_full(ICONS.get(agg, "user-offline"), agg)
-            self.indicator.set_title(f"Claude Code: {agg}")
-            self._last_agg = agg
+                slot.set_label(label)
+                slot.show()
+            else:
+                slot.hide()
 
         return True
 
