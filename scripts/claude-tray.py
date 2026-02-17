@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Claude Code system tray indicator for Ubuntu (AppIndicator3).
 
-Reads per-session status from ~/.claude-tray/sessions.json
-and shows an aggregate icon + per-session details in the menu.
+One tray icon per Claude Code session. Each icon shows the session's
+current status. Icons appear/disappear as sessions start/end.
 
-- Icon updates every second via polling.
-- Menu content updates only when the user opens it (show signal).
-- Sessions with no hook activity for 60s are considered dead.
+Sessions with no hook activity for 60s are pruned automatically.
 
 Requirements:
     sudo apt install gir1.2-appindicator3-0.1
@@ -21,7 +19,6 @@ gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, AppIndicator3, GLib
 
 STATUS_FILE = os.path.expanduser("~/.claude-tray/sessions.json")
-MAX_SLOTS = 10
 STALE_SECONDS = 60
 
 ICONS = {
@@ -30,17 +27,6 @@ ICONS = {
     "active":  "user-available",
     "idle":    "user-offline",
 }
-
-STATUS_PRIORITY = {"working": 0, "waiting": 1, "active": 2, "idle": 3}
-
-
-def aggregate_status(sessions):
-    if not sessions:
-        return "idle"
-    return min(
-        (s.get("status", "idle") for s in sessions.values()),
-        key=lambda s: STATUS_PRIORITY.get(s, 99),
-    )
 
 
 def short_id(session_id):
@@ -61,91 +47,80 @@ def read_sessions():
     }
 
 
-class ClaudeTray:
-    def __init__(self):
+class SessionIndicator:
+    """A single tray icon for one Claude Code session."""
+
+    def __init__(self, session_id, info):
+        self.session_id = session_id
         self.indicator = AppIndicator3.Indicator.new(
-            "claude-code-indicator",
+            f"claude-session-{session_id}",
             "user-offline",
             AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
         )
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
-        self.indicator.set_title("Claude Code")
 
-        self._last_agg = None
-        self.menu = Gtk.Menu()
+        # Minimal menu (AppIndicator3 requires one)
+        menu = Gtk.Menu()
+        self._label_item = Gtk.MenuItem(label="")
+        self._label_item.set_sensitive(False)
+        menu.append(self._label_item)
+        menu.show_all()
+        self.indicator.set_menu(menu)
 
-        # Pre-allocate all widgets once — never add/remove later
-        self._header = Gtk.MenuItem(label="No active sessions")
-        self._header.set_sensitive(False)
-        self.menu.append(self._header)
+        self._last_status = None
+        self.update(info)
 
-        self._slot_sep = Gtk.SeparatorMenuItem()
-        self._slot_sep.set_no_show_all(True)
-        self.menu.append(self._slot_sep)
+    def update(self, info):
+        status = info.get("status", "idle")
+        tool = info.get("tool_name")
+        cwd = info.get("cwd", "")
+        dirname = os.path.basename(cwd) if cwd else ""
 
-        self._slots = []
-        for _ in range(MAX_SLOTS):
-            item = Gtk.MenuItem(label="")
-            item.set_sensitive(False)
-            item.set_no_show_all(True)
-            self.menu.append(item)
-            self._slots.append(item)
+        title = f"Claude [{short_id(self.session_id)}]"
+        if dirname:
+            title += f" — {dirname}"
+        title += f": {status}"
+        if tool:
+            title += f" ({tool})"
 
-        self.menu.append(Gtk.SeparatorMenuItem())
-        quit_item = Gtk.MenuItem(label="Quit")
-        quit_item.connect("activate", Gtk.main_quit)
-        self.menu.append(quit_item)
-        self.menu.show_all()
+        self.indicator.set_title(title)
+        self._label_item.set_label(title)
 
-        # Refresh menu content only when user clicks the tray icon
-        self.menu.connect("show", self._on_menu_show)
+        if status != self._last_status:
+            self.indicator.set_icon_full(
+                ICONS.get(status, "user-offline"), status
+            )
+            self._last_status = status
 
-        self.indicator.set_menu(self.menu)
-        GLib.timeout_add_seconds(1, self._update_icon)
+    def remove(self):
+        self.indicator.set_status(AppIndicator3.IndicatorStatus.PASSIVE)
 
-    def _on_menu_show(self, _widget):
-        """Populate pre-allocated slots with current data when menu opens."""
+
+class ClaudeTrayManager:
+    """Manages one SessionIndicator per active session."""
+
+    def __init__(self):
+        self._indicators = {}  # session_id -> SessionIndicator
+        GLib.timeout_add_seconds(1, self._poll)
+
+    def _poll(self):
         sessions = read_sessions()
-        items = list(sessions.items())[:MAX_SLOTS]
 
-        if not items:
-            self._header.set_label("No active sessions")
-            self._slot_sep.hide()
-        else:
-            self._header.set_label(f"{len(items)} session(s)")
-            self._slot_sep.show()
-
-        for i, slot in enumerate(self._slots):
-            if i < len(items):
-                sid, info = items[i]
-                status = info.get("status", "?")
-                tool = info.get("tool_name")
-                cwd = info.get("cwd", "")
-                dirname = os.path.basename(cwd) if cwd else ""
-
-                label = f"[{short_id(sid)}] {status}"
-                if tool:
-                    label += f" ({tool})"
-                if dirname:
-                    label += f"  \u2014 {dirname}"
-
-                slot.set_label(label)
-                slot.show()
+        # Update existing / create new
+        for sid, info in sessions.items():
+            if sid in self._indicators:
+                self._indicators[sid].update(info)
             else:
-                slot.hide()
+                self._indicators[sid] = SessionIndicator(sid, info)
 
-    def _update_icon(self):
-        """Timer: only update tray icon, never touch menu widgets."""
-        sessions = read_sessions()
-        agg = aggregate_status(sessions)
-
-        if agg != self._last_agg:
-            self.indicator.set_icon_full(ICONS.get(agg, "user-offline"), agg)
-            self.indicator.set_title(f"Claude Code: {agg}")
-            self._last_agg = agg
+        # Remove dead sessions
+        dead = [sid for sid in self._indicators if sid not in sessions]
+        for sid in dead:
+            self._indicators[sid].remove()
+            del self._indicators[sid]
 
         return True
 
 
-ClaudeTray()
+ClaudeTrayManager()
 Gtk.main()
