@@ -19,13 +19,14 @@ gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, AppIndicator3, GLib
 
 STATUS_FILE = os.path.expanduser("~/.claude-tray/sessions.json")
+ICONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "icons")
 STALE_SECONDS = 60
 
 ICONS = {
-    "working": "media-record",
-    "waiting": "dialog-question",
-    "active":  "user-available",
-    "idle":    "user-offline",
+    "working": "claude-working",
+    "waiting": "claude-waiting",
+    "active":  "claude-active",
+    "idle":    "claude-idle",
 }
 
 
@@ -54,9 +55,10 @@ class SessionIndicator:
         self.session_id = session_id
         self.indicator = AppIndicator3.Indicator.new(
             f"claude-session-{session_id}",
-            "user-offline",
+            "claude-idle",
             AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
         )
+        self.indicator.set_icon_theme_path(os.path.abspath(ICONS_DIR))
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
 
         # Minimal menu (AppIndicator3 requires one)
