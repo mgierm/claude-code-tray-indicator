@@ -41,6 +41,28 @@ def short_id(session_id):
     return session_id[:8] if len(session_id) > 8 else session_id
 
 
+def build_labels(sessions):
+    """Build a list of label strings representing current state."""
+    labels = []
+    if not sessions:
+        labels.append("No active sessions")
+    else:
+        labels.append(f"{len(sessions)} session(s)")
+        for sid, info in sessions.items():
+            status = info.get("status", "?")
+            tool = info.get("tool_name")
+            cwd = info.get("cwd", "")
+            dirname = os.path.basename(cwd) if cwd else ""
+
+            label = f"[{short_id(sid)}] {status}"
+            if tool:
+                label += f" ({tool})"
+            if dirname:
+                label += f"  \u2014 {dirname}"
+            labels.append(label)
+    return labels
+
+
 class ClaudeTray:
     def __init__(self):
         self.indicator = AppIndicator3.Indicator.new(
@@ -51,58 +73,31 @@ class ClaudeTray:
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.indicator.set_title("Claude Code")
         self.menu = Gtk.Menu()
-        self._build_empty_menu()
+        self._last_labels = None
+        self._last_agg = None
+        self._session_items = []
+        self._build_menu([])
         self.indicator.set_menu(self.menu)
         GLib.timeout_add_seconds(1, self.update_status)
 
-    def _build_empty_menu(self):
-        for child in self.menu.get_children():
-            self.menu.remove(child)
-        item = Gtk.MenuItem(label="No active sessions")
-        item.set_sensitive(False)
-        self.menu.append(item)
-        sep = Gtk.SeparatorMenuItem()
-        self.menu.append(sep)
-        quit_item = Gtk.MenuItem(label="Quit")
-        quit_item.connect("activate", Gtk.main_quit)
-        self.menu.append(quit_item)
-        self.menu.show_all()
-
-    def _rebuild_menu(self, sessions):
+    def _build_menu(self, labels):
+        """Full menu rebuild — only called when labels actually change."""
         for child in self.menu.get_children():
             self.menu.remove(child)
 
-        if not sessions:
-            item = Gtk.MenuItem(label="No active sessions")
+        self._session_items = []
+        for text in labels:
+            item = Gtk.MenuItem(label=text)
             item.set_sensitive(False)
             self.menu.append(item)
-        else:
-            header = Gtk.MenuItem(label=f"{len(sessions)} session(s)")
-            header.set_sensitive(False)
-            self.menu.append(header)
-            self.menu.append(Gtk.SeparatorMenuItem())
-
-            for sid, info in sessions.items():
-                status = info.get("status", "?")
-                tool = info.get("tool_name")
-                cwd = info.get("cwd", "")
-                dirname = os.path.basename(cwd) if cwd else ""
-
-                label = f"[{short_id(sid)}] {status}"
-                if tool:
-                    label += f" ({tool})"
-                if dirname:
-                    label += f"  \u2014 {dirname}"
-
-                item = Gtk.MenuItem(label=label)
-                item.set_sensitive(False)
-                self.menu.append(item)
+            self._session_items.append(item)
 
         self.menu.append(Gtk.SeparatorMenuItem())
         quit_item = Gtk.MenuItem(label="Quit")
         quit_item.connect("activate", Gtk.main_quit)
         self.menu.append(quit_item)
         self.menu.show_all()
+        self._last_labels = labels
 
     def update_status(self):
         try:
@@ -112,9 +107,16 @@ class ClaudeTray:
             sessions = {}
 
         agg = aggregate_status(sessions)
-        self.indicator.set_icon_full(ICONS.get(agg, "user-offline"), agg)
-        self.indicator.set_title(f"Claude Code: {agg}")
-        self._rebuild_menu(sessions)
+
+        if agg != self._last_agg:
+            self.indicator.set_icon_full(ICONS.get(agg, "user-offline"), agg)
+            self.indicator.set_title(f"Claude Code: {agg}")
+            self._last_agg = agg
+
+        labels = build_labels(sessions)
+        if labels != self._last_labels:
+            self._build_menu(labels)
+
         return True
 
 
