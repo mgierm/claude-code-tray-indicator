@@ -70,7 +70,7 @@ def update_status(data, event, session_id):
                 # Capture first user prompt as session title
                 title = existing.get("title", "")
                 if not title and event == "UserPromptSubmit":
-                    prompt = data.get("user_prompt", "")
+                    prompt = data.get("prompt", "")
                     title = prompt[:TITLE_MAX_LEN]
                     if len(prompt) > TITLE_MAX_LEN:
                         title += "..."
@@ -95,14 +95,6 @@ def main():
     data = json.load(sys.stdin)
     event = data.get("hook_event_name", "")
     session_id = data.get("session_id", "unknown")
-
-    # Debug: log all hook events
-    debug_file = os.path.join(STATUS_DIR, "debug.log")
-    os.makedirs(STATUS_DIR, exist_ok=True)
-    with open(debug_file, "a") as df:
-        df.write(f"{datetime.now().isoformat()} event={event} sid={session_id[:8]} keys={list(data.keys())}\n")
-        if event == "UserPromptSubmit":
-            df.write(f"  user_prompt={data.get('user_prompt', '<MISSING>')!r}\n")
 
     if event == "SessionStart" and not is_tray_running():
         launch_tray()

@@ -1,6 +1,6 @@
 {
   "name": "tray-indicator",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "System tray indicator for Ubuntu showing Claude Code session status (working, waiting, idle) with multi-session support",
   "author": {
     "name": "Mikołaj Giermek",
