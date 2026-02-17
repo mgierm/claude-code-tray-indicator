@@ -19,7 +19,7 @@ STATE_MAP = {
     "SessionEnd": "idle",
 }
 
-TITLE_MAX_LEN = 50
+TITLE_MAX_LEN = 20
 
 
 def is_tray_running():
