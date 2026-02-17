@@ -3,6 +3,7 @@
 
 Tracks per-session status in a shared JSON file (~/.claude-tray/sessions.json).
 On SessionStart, auto-launches the tray app if not already running.
+On first UserPromptSubmit, captures the prompt as session title.
 """
 import json, sys, os, fcntl, subprocess, shutil
 from datetime import datetime
@@ -18,9 +19,10 @@ STATE_MAP = {
     "SessionEnd": "idle",
 }
 
+TITLE_MAX_LEN = 50
+
 
 def is_tray_running():
-    """Check if claude-tray.py is already running."""
     try:
         result = subprocess.run(
             ["pgrep", "-f", "claude-tray.py"],
@@ -32,7 +34,6 @@ def is_tray_running():
 
 
 def launch_tray():
-    """Launch the tray app in the background (detached from this process)."""
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
     tray_script = os.path.join(plugin_root, "scripts", "claude-tray.py")
 
@@ -49,7 +50,6 @@ def launch_tray():
 
 
 def update_status(data, event, session_id):
-    """Write session status to the shared JSON file."""
     status = STATE_MAP.get(event, "unknown")
     os.makedirs(STATUS_DIR, exist_ok=True)
 
@@ -65,9 +65,20 @@ def update_status(data, event, session_id):
             if event == "SessionEnd":
                 sessions.pop(session_id, None)
             else:
+                existing = sessions.get(session_id, {})
+
+                # Capture first user prompt as session title
+                title = existing.get("title", "")
+                if not title and event == "UserPromptSubmit":
+                    prompt = data.get("user_prompt", "")
+                    title = prompt[:TITLE_MAX_LEN]
+                    if len(prompt) > TITLE_MAX_LEN:
+                        title += "..."
+
                 sessions[session_id] = {
                     "status": status,
                     "event": event,
+                    "title": title,
                     "tool_name": data.get("tool_name"),
                     "cwd": data.get("cwd"),
                     "timestamp": datetime.now().isoformat(),
