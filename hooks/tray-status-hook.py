@@ -4,7 +4,6 @@
 Tracks per-session status in a shared JSON file (~/.claude-tray/sessions.json).
 On SessionStart, auto-launches the tray app if not already running.
 On first UserPromptSubmit, captures the prompt as session title.
-Finds terminal PID via parent process chain for window focusing.
 """
 import json, sys, os, fcntl, subprocess, shutil
 from datetime import datetime
@@ -21,14 +20,6 @@ STATE_MAP = {
 }
 
 TITLE_MAX_LEN = 20
-
-# Terminal emulator process names
-TERMINAL_NAMES = {
-    "gnome-terminal-", "gnome-terminal-server",
-    "konsole", "xfce4-terminal", "mate-terminal",
-    "tilix", "terminator", "alacritty", "kitty", "wezterm",
-    "xterm", "urxvt", "st", "foot",
-}
 
 
 def is_tray_running():
@@ -58,30 +49,6 @@ def launch_tray():
     )
 
 
-def find_terminal_pid():
-    """Walk up the process tree to find the terminal emulator PID."""
-    try:
-        pid = os.getppid()  # claude process
-        for _ in range(10):  # max depth
-            stat_path = f"/proc/{pid}/stat"
-            comm_path = f"/proc/{pid}/comm"
-            if not os.path.exists(stat_path):
-                break
-            with open(comm_path) as f:
-                name = f.read().strip()
-            if any(name.startswith(t) for t in TERMINAL_NAMES):
-                return pid
-            with open(stat_path) as f:
-                fields = f.read().split()
-                ppid = int(fields[3])
-            if ppid <= 1:
-                break
-            pid = ppid
-    except (OSError, IndexError, ValueError):
-        pass
-    return None
-
-
 def update_status(data, event, session_id):
     status = STATE_MAP.get(event, "unknown")
     os.makedirs(STATUS_DIR, exist_ok=True)
@@ -108,18 +75,12 @@ def update_status(data, event, session_id):
                     if len(prompt) > TITLE_MAX_LEN:
                         title += "..."
 
-                # Find terminal PID on first event
-                terminal_pid = existing.get("terminal_pid")
-                if terminal_pid is None and event == "SessionStart":
-                    terminal_pid = find_terminal_pid()
-
                 sessions[session_id] = {
                     "status": status,
                     "event": event,
                     "title": title,
                     "tool_name": data.get("tool_name"),
                     "cwd": data.get("cwd"),
-                    "terminal_pid": terminal_pid,
                     "timestamp": datetime.now().isoformat(),
                 }
 
